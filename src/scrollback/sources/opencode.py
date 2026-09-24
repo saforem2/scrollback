@@ -1,12 +1,15 @@
 """opencode source adapter (read-only SQLite).
 
 opencode stores sessions in a SQLite database (default
-~/.local/share/opencode/opencode.db) with three relevant tables:
+~/.local/share/opencode/opencode.db). V1 uses three relevant tables:
 
   session(id, title, directory, time_created, time_updated, model, agent,
           parent_id, ...)
   message(id, session_id, time_created, data)   -- data is JSON
   part(id, message_id, session_id, time_created, data)  -- data is JSON
+
+V2 uses ``session_v2`` metadata and projected ``session_message`` rows. A
+migrated database can contain both schemas while only the V2 tables have data.
 
 We open the database strictly read-only (URI `mode=ro`) so we never lock
 it for writing or interfere with a running opencode. The DB may be large
@@ -67,7 +70,7 @@ class OpenCodeSource(Source):
     def _connect(self) -> sqlite3.Connection:
         # `mode=ro` => read-only; never creates or writes. `immutable=0`
         # so SQLite still consults the WAL for a consistent live snapshot.
-        uri = f"file:{self._db_path}?mode=ro"
+        uri = f"{self._db_path.resolve().as_uri()}?mode=ro"
         conn = sqlite3.connect(uri, uri=True, timeout=5.0)
         conn.row_factory = sqlite3.Row
         return conn
@@ -84,6 +87,19 @@ class OpenCodeSource(Source):
         # columns (cache/reasoning) are read when present and default to None
         # on older opencode databases that lack them.
         with self._connect() as conn:
+            if _uses_v2(conn):
+                rows = conn.execute(
+                    """
+                    SELECT s.*,
+                           (SELECT COUNT(*) FROM session_message m
+                            WHERE m.session_id = s.id) AS msg_count
+                    FROM session_v2 s
+                    ORDER BY s.time_updated DESC
+                    """
+                ).fetchall()
+                for row in rows:
+                    yield self._session_from_row(row, (), message_count=row["msg_count"])
+                return
             rows = conn.execute(
                 """
                 SELECT s.*,
@@ -114,6 +130,16 @@ class OpenCodeSource(Source):
         if not self.is_available():
             return None
         with self._connect() as conn:
+            if _uses_v2(conn):
+                srow = conn.execute(
+                    "SELECT * FROM session_v2 WHERE id = ?", (session_id,)
+                ).fetchone()
+                if srow is None:
+                    return None
+                messages = tuple(self._load_v2_messages(conn, session_id))
+                return self._session_from_row(
+                    srow, messages, message_count=len(messages)
+                )
             srow = conn.execute(
                 "SELECT * FROM session WHERE id = ?", (session_id,)
             ).fetchone()
@@ -184,6 +210,17 @@ class OpenCodeSource(Source):
         if not self.is_available():
             return None
         with self._connect() as conn:
+            if _uses_v2(conn):
+                srow = conn.execute(
+                    "SELECT * FROM session_v2 WHERE id = ?", (session_id,)
+                ).fetchone()
+                if srow is None:
+                    return None
+                count = conn.execute(
+                    "SELECT COUNT(*) AS c FROM session_message WHERE session_id = ?",
+                    (session_id,),
+                ).fetchone()["c"]
+                return self._session_from_row(srow, (), message_count=count)
             srow = conn.execute(
                 "SELECT * FROM session WHERE id = ?", (session_id,)
             ).fetchone()
@@ -200,6 +237,10 @@ class OpenCodeSource(Source):
         if not self.is_available():
             return []
         with self._connect() as conn:
+            if _uses_v2(conn):
+                return self._load_v2_messages(
+                    conn, session_id, offset=offset, limit=limit
+                )
             lim = -1 if limit is None else limit
             mrows = conn.execute(
                 """
@@ -250,6 +291,25 @@ class OpenCodeSource(Source):
             )
         return messages
 
+    def _load_v2_messages(
+        self,
+        conn: sqlite3.Connection,
+        session_id: str,
+        *,
+        offset: int = 0,
+        limit: int | None = None,
+    ) -> list[Message]:
+        rows = conn.execute(
+            """
+            SELECT id, type, seq, time_created, data FROM session_message
+            WHERE session_id = ?
+            ORDER BY seq, id
+            LIMIT ? OFFSET ?
+            """,
+            (session_id, -1 if limit is None else limit, offset),
+        ).fetchall()
+        return [_v2_message_from_row(row) for row in rows]
+
 
 # -- helpers ---------------------------------------------------------------
 
@@ -258,6 +318,14 @@ def _chunks(seq: list, size: int):
     """Yield successive `size`-length chunks of `seq`."""
     for i in range(0, len(seq), size):
         yield seq[i : i + size]
+
+
+def _uses_v2(conn: sqlite3.Connection) -> bool:
+    """Return whether the V2 schema is the authoritative populated store."""
+    exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'session_v2'"
+    ).fetchone()
+    return bool(exists and conn.execute("SELECT 1 FROM session_v2 LIMIT 1").fetchone())
 
 
 def _col(row: sqlite3.Row, key: str) -> Any:
@@ -310,6 +378,42 @@ def _model_from_message(data: dict[str, Any]) -> str | None:
     return data.get("modelID")
 
 
+def _v2_message_from_row(row: sqlite3.Row) -> Message:
+    data = _loads(row["data"])
+    message_type = row["type"]
+    if message_type == "user":
+        role = "user"
+    elif message_type in {"assistant", "compaction"}:
+        role = "assistant"
+    else:
+        role = "system"
+
+    content = data.get("content")
+    parts: list[Part] = []
+    if isinstance(content, list):
+        for index, raw_part in enumerate(content):
+            if not isinstance(raw_part, dict):
+                continue
+            part = _to_part(f"{row['id']}:{index}", raw_part)
+            if part is not None:
+                parts.append(part)
+    else:
+        text = data.get("text") or data.get("summary") or data.get("description")
+        if text:
+            part_type = "compaction" if message_type == "compaction" else "text"
+            parts.append(Part(id=f"{row['id']}:0", type=part_type, text=str(text), raw=data))
+
+    time = data.get("time") if isinstance(data.get("time"), dict) else {}
+    return Message(
+        id=row["id"],
+        role=role,
+        created=_to_dt(time.get("created") or row["time_created"]),
+        parts=tuple(parts),
+        model=_model_from_message(data),
+        raw=data,
+    )
+
+
 def _to_part(part_id: str, data: dict[str, Any]) -> Part | None:
     ptype = data.get("type", "unknown")
     if ptype in _TEXT_PART_TYPES:
@@ -321,7 +425,7 @@ def _to_part(part_id: str, data: dict[str, Any]) -> Part | None:
         )
     if ptype == "tool":
         state = data.get("state", {}) or {}
-        tool_name = data.get("tool")
+        tool_name = data.get("tool") or data.get("name")
         status = state.get("status")
         text = _render_tool(tool_name, state)
         return Part(
@@ -360,6 +464,13 @@ def _render_tool(tool_name: str | None, state: dict[str, Any]) -> str:
         parts.append(out)
     elif out is not None:
         parts.append(json.dumps(out, ensure_ascii=False))
+    content = state.get("content")
+    if isinstance(content, list):
+        for item in content:
+            if isinstance(item, dict) and item.get("text"):
+                parts.append(str(item["text"]))
+            elif item is not None:
+                parts.append(json.dumps(item, ensure_ascii=False))
     err = state.get("error")
     if err:
         parts.append(f"[error] {err}")

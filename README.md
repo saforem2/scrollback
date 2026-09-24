@@ -444,7 +444,7 @@ built without FTS5, `index` says so and search keeps working without it.
 
 | Source       | Reads                                                       | Default location                       |
 |:-------------|:-----------------------------------------------------------|:---------------------------------------|
-| `opencode`   | SQLite (`session` / `message` / `part`), read-only         | `~/.local/share/opencode/opencode.db`  |
+| `opencode`   | V1/V2 SQLite session history, read-only                     | `~/.local/share/opencode/opencode.db`  |
 | `claudecode` | per-project JSONL transcripts + nested subagent sidechains  | `~/.claude/projects/`                   |
 | `codex`      | per-session `rollout-*.jsonl` rollouts                      | `~/.codex/sessions/`                    |
 | `hermes`     | SQLite (`sessions` / `messages`), read-only                  | `~/.hermes/state.db`                    |
