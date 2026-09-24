@@ -10,6 +10,7 @@ import os
 import pytest
 
 from scrollback.sources.claudecode import ClaudeCodeSource
+from scrollback.sources.hermes import HermesSource
 from scrollback.sources.opencode import OpenCodeSource
 from scrollback.store import Store
 
@@ -70,6 +71,26 @@ def test_claudecode_listing_and_load():
     full = src.load_session(s0.id)
     assert full is not None
     assert full.id == s0.id
+
+
+# -- hermes ----------------------------------------------------------------
+
+
+def test_hermes_listing_and_load_are_readonly():
+    src = HermesSource()
+    if not src.is_available():
+        pytest.skip("Hermes state.db not present")
+    db = src.location()
+    before = _mtime(db)
+
+    sessions = list(src.list_sessions())
+    if not sessions:
+        pytest.skip("no Hermes sessions on disk")
+    session = src.load_session(sessions[0].id)
+    assert session is not None
+    assert session.source == "hermes"
+    assert session.message_count == len(session.messages)
+    assert _mtime(db) == before
 
 
 # -- unified store ---------------------------------------------------------

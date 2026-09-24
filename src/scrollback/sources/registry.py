@@ -11,6 +11,7 @@ from .aider import AiderSource
 from .base import Source
 from .claudecode import ClaudeCodeSource
 from .codex import CodexSource
+from .hermes import HermesSource
 from .opencode import OpenCodeSource
 
 #: Every adapter the program knows about, in display order.
@@ -18,6 +19,7 @@ ALL_SOURCES: tuple[type[Source], ...] = (
     OpenCodeSource,
     ClaudeCodeSource,
     CodexSource,
+    HermesSource,
     AiderSource,
 )
 

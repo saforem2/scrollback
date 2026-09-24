@@ -4,9 +4,9 @@
 
 Browse, search, copy, and export your AI coding-agent sessions from one
 local, read-only tool. scrollback reads the conversation history that
-agents like **opencode** and **Claude Code** already keep on disk and gives
-you a single, consistent view across them — from a scriptable command line
-or a local web app.
+agents like **opencode**, **Claude Code**, and **Hermes** already keep on disk
+and gives you a single, consistent view across them — from a scriptable
+command line or a local web app.
 
 Everything is local-first and strictly **read-only**: scrollback never
 modifies, locks for writing, or uploads your data.
@@ -447,6 +447,7 @@ built without FTS5, `index` says so and search keeps working without it.
 | `opencode`   | SQLite (`session` / `message` / `part`), read-only         | `~/.local/share/opencode/opencode.db`  |
 | `claudecode` | per-project JSONL transcripts + nested subagent sidechains  | `~/.claude/projects/`                   |
 | `codex`      | per-session `rollout-*.jsonl` rollouts                      | `~/.codex/sessions/`                    |
+| `hermes`     | SQLite (`sessions` / `messages`), read-only                  | `~/.hermes/state.db`                    |
 | `aider`      | per-project `.aider.chat.history.md` Markdown logs          | set `SCROLLBACK_AIDER_DIRS` to opt in  |
 
 More agents (Gemini CLI, Zed, VS Code Copilot Chat, GitHub Copilot CLI) are
@@ -469,6 +470,7 @@ point it elsewhere, and you can control how the web server binds:
 | `SCROLLBACK_OPENCODE_DB` | path to `opencode.db`                                       |
 | `SCROLLBACK_CLAUDE_DIR`  | path to `~/.claude` or `~/.claude/projects`                |
 | `SCROLLBACK_CODEX_DIR`   | path to `~/.codex` or `~/.codex/sessions`                  |
+| `SCROLLBACK_HERMES_DB`   | path to Hermes `state.db`                                  |
 | `SCROLLBACK_AIDER_DIRS`  | colon-separated dirs to scan for Aider history (opt-in)     |
 | `SCROLLBACK_PORT`        | web server port (default `8765`; or use `--port`)           |
 | `SCROLLBACK_HOST`        | web server bind host (default `127.0.0.1`; or use `--host`) |
